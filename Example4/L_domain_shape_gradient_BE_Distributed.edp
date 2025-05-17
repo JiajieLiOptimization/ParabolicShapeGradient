@@ -1,0 +1,193 @@
+// Boundary type "shape gradient"
+load "lapack"  
+load "msh3"
+real t = 0;
+// Function
+func f = (1-t^2)*((x-1)^2+(y-1)^2);
+func fx = (1-t^2)*2*(x-1);
+func fy = (1-t^2)*2*(y-1);
+int m, n;
+
+// Time
+real M = 100; 
+real T = 0.2;
+real dt = T/M; 
+
+real kappa= 1.0;
+// Mesh
+border ba(t=0, 1){x=t; y=0; label=1;}
+border bb(t=0, 0.5){x=1; y=t; label=1;}
+border bc(t=0, 0.5){x=1-t; y=0.5; label=1;}
+border bd(t=0.5, 1){x=0.5; y=t; label=1;}
+border be(t=0.5, 1){x=1-t; y=1; label=1;}
+border bf(t=0, 1){x=0; y=1-t; label=1;}
+real Nodee = 256;
+mesh The = buildmesh(ba(Nodee) + bb(Nodee/2) + bc(Nodee/2) + bd(Nodee/2) + be(Nodee/2) + bf(Nodee));
+
+// Fespace
+fespace Vhe(The, P1);
+Vhe ue, uue, ve, vve, we;
+Vhe[int] Ue(M+1), Ve(M+1);
+
+// Parabolic
+problem ParabolicBEue (ue, ve, init=m-1)= int2d(The)(
+    ue*ve
+    + dt*(dx(ue)*dx(ve) + dy(ue)*dy(ve))
+    )
+    + int2d(The)(
+    - uue*ve
+    - dt*f*ve
+    )
+    + on(1, 2, 3, 4, ue=0); //Dirichelet boundry
+
+uue = 0.05*sin(2*pi*x)*sin(2*pi*y);
+Ue[0] = uue;
+for (m = 1; m <= M; m++){ 
+    t = t+dt;
+    ParabolicBEue; 
+    uue = ue;
+    Ue[m] = uue;
+}
+
+// backward Euler of adjoint 
+problem AdjointBEve (ve, we, init=-m+M-1)= int2d(The)(
+    ve*we
+    + dt*(dx(ve)*dx(we) + dy(ve)*dy(we))
+    )
+    + int2d(The)(
+    - vve*we
+    - dt*ue*we
+    )
+    + on(1, 2, 3, 4, ve=0); //Dirichelet boundry
+
+vve = 0;
+Ve[M] = vve;
+for (m = M-1; m >= 0; m--){
+    ue = Ue[m];  
+    t = t-dt;           
+    AdjointBEve;  
+    vve = ve; 
+    Ve[m] = vve;
+}
+cout <<"The above is an approximate exact solution."<<endl;
+
+// Dual space
+int gamma = 3; 
+int gamNum = (gamma + 1) * (gamma + 2) / 2;
+real Bdy;
+real Bdyy = 0; 
+real CR;
+ofstream file("shape_gradient_L.txt", append);  
+file<<"BE,Distributed"<<" gamma = "<< gamma <<"  dt = "<< dt << endl;
+
+for(n=2;n<=6;n++){
+t = 0;
+real Node = 2^n ;
+mesh Th = buildmesh(ba(Node) + bb(Node/2) + bc(Node/2) + bd(Node/2) + be(Node/2) + bf(Node));
+fespace Vh(Th, P1);
+Vh u, uu, v, vv, w, thetax, thetay; 
+Vh[int] U(M+1), V(M+1);
+
+// Parabolic
+problem ParabolicBE (u, v, init=m-1)= int2d(Th)(
+    u*v
+    + dt*(dx(u)*dx(v) + dy(u)*dy(v))
+    )
+    + int2d(Th)(
+    - uu*v
+    - dt*f*v
+    )
+    + on(1, 2, 3, 4, u=0); //Dirichelet boundry
+
+uu = 0.05*sin(2*pi*x)*sin(2*pi*y);
+U[0] = uu;
+for (m = 1; m <= M; m++){ 
+    t = t+dt;
+    ParabolicBE; 
+    uu = u;
+    U[m] = uu;
+}
+
+// backward Euler of adjoint 
+problem AdjointBE (v, w, init=-m+M-1)= int2d(Th)(
+    v*w
+    + dt*(dx(v)*dx(w) + dy(v)*dy(w))
+    )
+    + int2d(Th)(
+    - vv*w
+    - dt*u*w
+    )
+    + on(1, 2, 3, 4, v=0); //Dirichelet boundry
+
+vv = 0;
+V[M] = vv;
+for (m = M-1; m >= 0; m--){
+    u = U[m];  
+    t = t-dt;           
+    AdjointBE;  
+    vv = v; 
+    V[m] = vv;
+}
+
+cout <<"[[[[[[[[[[[ Node = "<< Node <<" ]]]]]]]]]]]"<<endl;
+
+// Eulerian derivative
+real Error1, Error2;
+real[int] error1(gamNum), error2(gamNum); 
+real[int] KinvErr1(gamNum), KinvErr2(gamNum);
+real[int,int] K(gamNum,gamNum), Kinv(gamNum,gamNum);
+Vh[int] theta(gamNum);
+
+m = 0;
+for(int i=0;i<=gamma;i++)
+    for(int j=0;j<=gamma-i;j++)
+        theta[m++] = x^i*y^j; // basis
+for(int i=0;i<gamNum;i++)
+    for(int j=0;j<gamNum;j++)
+        K(i,j) = int2d(Th,qft=qf1pT) ( theta[i]*theta[j] + dx(theta[i])*dx(theta[j]) + dy(theta[i])*dy(theta[j]) );
+Kinv = K^-1;
+
+for(int i=0;i<gamNum;i++)
+{
+    error1[i] = 0;
+    error2[i] = 0;
+    thetax = dx(theta[i]);
+    thetay = dy(theta[i]);
+    m = 1;
+    // Composite trapezoid
+    for (t=dt ; t<=T ; t=t+dt){   
+        Error1 = int2d(Th,qft=qf1pT)((1/2)*Ue[m]^2*thetax - (1/2)*U[m]^2*thetax) // term1
+               - int2d(Th,qft=qf1pT)((1/dt)*(Ue[m]-Ue[m-1])*Ve[m]*thetax - (1/dt)*(U[m]-U[m-1])*V[m]*thetax) // term2
+               - int2d(Th,qft=qf1pT)(kappa*(dx(Ue[m])*dx(Ve[m])+dy(Ue[m])*dy(Ve[m]))*thetax - kappa*(dx(U[m])*dx(V[m])+dy(U[m])*dy(V[m]))*thetax) // term3
+               + int2d(Th,qft=qf1pT)(kappa*(thetax*dx(Ue[m])+thetay*dy(Ue[m]))*dx(Ve[m]) - kappa*(thetax*dx(U[m])+thetay*dy(U[m]))*dx(V[m])) // term4
+               + int2d(Th,qft=qf1pT)(kappa*dx(Ue[m])*(thetax*dx(Ve[m])+thetay*dy(Ve[m])) - kappa*dx(U[m])*(thetax*dx(V[m])+thetay*dy(V[m]))) // term5
+               + int2d(Th,qft=qf1pT)(fx*theta[i]*Ve[m] - fx*theta[i]*V[m]) // term6
+               + int2d(Th,qft=qf1pT)(f*Ve[m]*thetax - f*V[m]*thetax); //term7
+
+        Error2 = int2d(Th,qft=qf1pT)((1/2)*Ue[m]^2*thetay - (1/2)*U[m]^2*thetay) // term1
+               - int2d(Th,qft=qf1pT)((1/dt)*(Ue[m]-Ue[m-1])*Ve[m]*thetay - (1/dt)*(U[m]-U[m-1])*V[m]*thetay) // term2
+               - int2d(Th,qft=qf1pT)(kappa*(dx(Ue[m])*dx(Ve[m])+dy(Ue[m])*dy(Ve[m]))*thetay - kappa*(dx(U[m])*dx(V[m])+dy(U[m])*dy(V[m]))*thetay) // term3
+               + int2d(Th,qft=qf1pT)(kappa*(thetax*dx(Ue[m])+thetay*dy(Ue[m]))*dy(Ve[m]) - kappa*(thetax*dx(U[m])+thetay*dy(U[m]))*dy(V[m])) // term4
+               + int2d(Th,qft=qf1pT)(kappa*dy(Ue[m])*(thetax*dx(Ve[m])+thetay*dy(Ve[m])) - kappa*dy(U[m])*(thetax*dx(V[m])+thetay*dy(V[m]))) // term5
+               + int2d(Th,qft=qf1pT)(fy*theta[i]*Ve[m] - fy*theta[i]*V[m]) // term6
+               + int2d(Th,qft=qf1pT)(f*Ve[m]*thetay - f*V[m]*thetay); //term7
+
+        if(t==0 || t==T){
+            error1[i] = error1[i] + abs(Error1)*(dt/2);
+            error2[i] = error2[i] + abs(Error2)*(dt/2);
+        } 
+        else{
+            error1[i] = error1[i] + abs(Error1)*dt; 
+            error2[i] = error2[i] + abs(Error2)*dt;
+        }   
+    m++;
+    }
+}
+KinvErr1 = Kinv*error1;
+KinvErr2 = Kinv*error2;
+Bdy = (error1)'*KinvErr1 + (error2)'*KinvErr2;
+Bdy = sqrt(Bdy);
+CR = log(Bdyy/Bdy)/log(2.);
+Bdyy = Bdy;
+file<<"Node = "<< Node <<" ; Error = "<< Bdy <<" ; CR = "<< CR <<endl;
+}
