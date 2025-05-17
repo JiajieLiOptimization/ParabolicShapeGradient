@@ -1,0 +1,121 @@
+//Error of adjoint problem of parabolic equation
+//square, BE
+
+// Time
+real M = 2; 
+real T = 3;
+real dt = T/M; // dt = k
+real t = 0;
+
+// Mesh
+int Node = 100; // Mesh refinement
+mesh Th = square(Node,Node); // Union Jacdt flag type of mesh
+int m; // init=m-2
+
+// Norm
+real l2 = 0;
+real linfty = 0;
+real W02;
+real W12;
+real ku = 0.05; // Adjust the order of magnitude
+
+// Function
+real alpha = 1; //sin(alpha*pi*x)
+real beta = 1; //sin(beta*pi*y)
+func vExact = ku*(t-T)^3*sin(alpha*pi*x)*sin(beta*pi*y);
+func vxExact = -ku*alpha*pi*cos(pi*alpha*x)*sin(pi*beta*y)*(T - t)^3;
+func vyExact = -ku*beta*pi*cos(pi*beta*y)*sin(pi*alpha*x)*(T - t)^3;
+func uExact = - ku*3*sin(pi*alpha*x)*sin(pi*beta*y)*(T - t)^2 - ku*(alpha^2+beta^2)*pi^2*sin(pi*alpha*x)*sin(pi*beta*y)*(T - t)^3;
+func uxExact = - ku*3*alpha*pi*cos(pi*alpha*x)*sin(pi*beta*y)*(T - t)^2 - ku*(alpha^2 + beta^2)*alpha*pi^3*cos(pi*alpha*x)*sin(pi*beta*y)*(T - t)^3;
+func uyExact = - ku*3*beta*pi*cos(pi*beta*y)*sin(pi*alpha*x)*(T - t)^2 - ku*(alpha^2 + beta^2)*beta*pi^3*cos(pi*beta*y)*sin(pi*alpha*x)*(T - t)^3;
+func f =  ku*6*sin(pi*alpha*x)*sin(pi*beta*y)*(T - t) - ku*(alpha^2+beta^2)^2*pi^4*sin(pi*alpha*x)*sin(pi*beta*y)*(T - t)^3;
+
+// Fespace
+fespace Vh(Th, P1);
+Vh u, uu, v, vv;
+Vh[int] U(M+1);
+
+// Parabolic
+problem dHeat (u, v, init=m-1)= int2d(Th)(
+u*v
++ dt*(dx(u)*dx(v) + dy(u)*dy(v))
+)
++ int2d(Th)(
+- uu*v
+- dt*f*v
+)
++ on(1, 2, 3, 4, u=0); //Dirichelet boundry
+
+u = - ku*3*sin(pi*alpha*x)*sin(pi*beta*y)*T^2 - ku*(alpha^2+beta^2)*pi^2*sin(pi*alpha*x)*sin(pi*beta*y)*T^3;
+U[0] = u;
+uu = u;
+
+// Time loop
+for (m = 1; m <= M; m++){ 
+    t = t+dt;
+    cout << "t=" << t << endl;
+    dHeat; 
+    
+    // Norms calculation
+    W02 = int2d(Th)((u-uExact)^2);
+    W12 = W02 + int2d(Th)((uxExact-dx(u))^2+(uyExact-dy(u))^2);
+    l2 = l2 + W12;
+    W02 = sqrt(W02);
+    if(W02 > linfty){
+        linfty = W02;
+    }
+    
+    // Update
+    U[m] = u;
+    uu = u; 
+}
+
+// Export data
+l2 = sqrt(l2 * dt);  
+ofstream file("error_data.txt", append);  
+file << "Parabolic : Fineness of the grid = " << Node << " ; Time step = " << dt <<" ; l^2 norm = " << l2 <<"  ; l^infty norm = " << linfty << endl;
+cout << "Error of parabolic equation: l^infty norm = " <<  linfty << endl;
+
+cout << "================== Adjoint ==================" << endl;
+
+// Adjoint
+l2 = 0; // Norm
+linfty = 0;
+Vh w; // Fespace
+
+// backward Euler of adjoint 
+problem AdjointBE (v, w, init=-m+M-1)= int2d(Th)(
+v*w
++ dt*(dx(v)*dx(w) + dy(v)*dy(w))
+)
++ int2d(Th)(
+- vv*w
+- dt*u*w
+)
++ on(1, 2, 3, 4, v=0); //Dirichelet boundry
+
+vv = 0;
+// Time loop
+for (m = M-1; m >= 0; m--){
+    u = U[m];  
+    t = t-dt;    
+    cout << "t=" << t << endl;        
+    AdjointBE;
+
+    // Norms calculation
+    W02 = int2d(Th)((v-vExact)^2);
+    W12 = W02 + int2d(Th)((vxExact-dx(v))^2+(vyExact-dy(v))^2);
+    l2 = l2 + W12;
+    W02 = sqrt(W02);
+    if(W02 > linfty){
+        linfty = W02;
+    }
+
+    // Update
+    vv = v; 
+}
+
+// Export data
+l2 = sqrt(l2 * dt);  
+file << "Adjoint    : Fineness of the grid = " << Node << " ; Time step = " << dt <<" ; l^2 norm = " << l2 <<"  ; l^infty norm = " << linfty << endl;
+cout << "Error of parabolic equation: l^infty norm = " <<  linfty << endl;
