@@ -1,0 +1,152 @@
+// Distributed type "shape gradient"
+load "lapack"  
+load "msh3"
+
+// Time
+real M = 2000; 
+real T = 1;
+real dt = T/M; // dt = k
+real t; 
+
+// Function 
+real ku = 1; // Adjust the order of magnitude
+
+real kappa = 1;
+func fExact = (177*ku*(T - t)^3*(x^2/4 + y^2 - 1))/2 - 3*ku*(2*T - 2*t)*(x^2/4 + y^2 - 1)^3 + (21*ku*x^2*(T - t)^3)/2 + 312*ku*y^2*(T - t)^3;
+
+// Dual space
+int gamma = 2; 
+int gamNum = (gamma + 1) * (gamma + 2) / 2; 
+ofstream file("error_shape_gradient.txt", append);  
+file<<"Distribution BE"<<" gamma = "<< gamma <<"  M = "<< M << endl;
+// file<<"alpha = "<< alpha <<"  beta = "<< beta <<"  ku = "<< ku <<endl;
+
+// Mesh size 
+int n,m; 
+border a(t=0, 1){x=2*cos(2*pi*t); y=sin(2*pi*t); label=1;}
+for(n=6;n<=7;n++){
+t = 0;    
+int Node = 2^n;
+mesh Th = buildmesh(a(Node));
+
+// Fespace
+fespace Vh(Th, P1);
+Vh u, uu, v, vv, w, ux, uy, vx, vy, ut, f, fx, fy;
+Vh[int] U(M+1),V(M+1);
+
+// Parabolic
+problem ParabolicBE (u, v, init=m-1)= int2d(Th)(
+    u*v
+    + dt*kappa*(dx(u)*dx(v) + dy(u)*dy(v))
+    )
+    + int2d(Th)(
+    - uu*v
+    - dt*fExact*v
+    )
+    + on(1, 2, 3, 4, u=0); //Dirichelet boundry
+
+uu = 3*ku*T^2*(x^2/4 + y^2 - 1)^3 - (15*ku*T^3*(x^2/4 + y^2 - 1)^2)/2 - (3*ku*x^2*T^3*(x^2/4 + y^2 - 1))/2 - 24*ku*y^2*T^3*(x^2/4 + y^2 - 1);
+U[0] = uu;
+for (m = 1; m <= M; m++){ 
+    t = t+dt;
+    ParabolicBE; 
+    uu = u;
+    U[m] = uu;
+}
+
+// backward Euler of adjoint 
+problem AdjointBE (v, w, init=-m+M-1)= int2d(Th)(
+    v*w
+    + dt*kappa*(dx(v)*dx(w) + dy(v)*dy(w))
+    )
+    + int2d(Th)(
+    - vv*w
+    - dt*u*w
+    )
+    + on(1, 2, 3, 4, v=0); //Dirichelet boundry
+
+vv = 0;
+V[M] = vv;
+for (m = M-1; m >= 0; m--){
+    u = U[m];  
+    t = t-dt;           
+    AdjointBE;  
+    vv = v; 
+    V[m] = vv;
+}
+
+cout <<"[[[[[[[[[[[ Node = "<< Node <<" ]]]]]]]]]]]"<<endl;
+
+// Eulerian derivative
+real Error1, Error2;
+real[int] error1(gamNum), error2(gamNum); 
+real[int] KinvErr1(gamNum), KinvErr2(gamNum);
+real[int,int] K(gamNum,gamNum), Kinv(gamNum,gamNum);
+real Bdy;
+Vh[int] theta(gamNum);
+Vh thetax, thetay;
+
+m = 0;
+for(int i=0;i<=gamma;i++)
+    for(int j=0;j<=gamma-i;j++)
+        theta[m++] = x^i*y^j; // basis
+for(int i=0;i<gamNum;i++)
+    for(int j=0;j<gamNum;j++)
+        K(i,j) = int2d(Th,qft=qf5pT) ( theta[i]*theta[j] + thetax*dx(theta[j]) + thetay*dy(theta[j]) );
+Kinv = K^-1;
+
+
+for(int i=0;i<gamNum;i++)
+{
+    error1[i] = 0;
+    error2[i] = 0;
+    thetax = dx(theta[i]);
+    thetay = dy(theta[i]);
+    m = 1;
+    // Composite trapezoid
+    for (t=dt ; t<=T ; t=t+dt){   
+        v = ku*(t-T)^3 *(1-(x^2)/4 - y^2)^3;
+        f = (177*ku*(T - t)^3*(x^2/4 + y^2 - 1))/2 - 3*ku*(2*T - 2*t)*(x^2/4 + y^2 - 1)^3 + (21*ku*x^2*(T - t)^3)/2 + 312*ku*y^2*(T - t)^3;
+        ut = (45*ku*(T - t)^2*(x^2/4 + y^2 - 1)^2)/2 - 3*ku*(2*T - 2*t)*(x^2/4 + y^2 - 1)^3 + (9*ku*x^2*(T - t)^2*(x^2/4 + y^2 - 1))/2 + 72*ku*y^2*(T - t)^2*(x^2/4 + y^2 - 1);
+        fx = (261*ku*x*(T - t)^3)/4 - (9*ku*x*(2*T - 2*t)*(x^2/4 + y^2 - 1)^2)/2;
+        fy = 801*ku*y*(T - t)^3 - 18*ku*y*(2*T - 2*t)*(x^2/4 + y^2 - 1)^2;
+        ux = (9*ku*x*(T - t)^2*(x^2/4 + y^2 - 1)^2)/2 - 12*ku*x*y^2*(T - t)^3 - (21*ku*x*(T - t)^3*(x^2/4 + y^2 - 1))/2 - (3*ku*x^3*(T - t)^3)/4;
+        uy = 18*ku*y*(T - t)^2*(x^2/4 + y^2 - 1)^2 - 3*ku*x^2*y*(T - t)^3 - 78*ku*y*(T - t)^3*(x^2/4 + y^2 - 1) - 48*ku*y^3*(T - t)^3;
+        vx = (3*ku*x*(T - t)^3*(x^2/4 + y^2 - 1)^2)/2;
+        vy = 6*ku*y*(T - t)^3*(x^2/4 + y^2 - 1)^2;
+        u = 3*ku*(T - t)^2*(x^2/4 + y^2 - 1)^3 - (15*ku*(T - t)^3*(x^2/4 + y^2 - 1)^2)/2 - (3*ku*x^2*(T - t)^3*(x^2/4 + y^2 - 1))/2 - 24*ku*y^2*(T - t)^3*(x^2/4 + y^2 - 1);
+
+        Error1 = int2d(Th)((1/2)*u^2*thetax - (1/2)*U[m]^2*thetax) // term1
+               - int2d(Th)(ut*v*thetax - (1/dt)*(U[m]-U[m-1])*V[m]*thetax) // term2
+               - int2d(Th)(kappa*(ux*vx+uy*vy)*thetax - kappa*(dx(U[m])*dx(V[m])+dy(U[m])*dy(V[m]))*thetax) // term3
+               + int2d(Th)(kappa*(thetax*ux+thetay*uy)*vx - kappa*(thetax*dx(U[m])+thetay*dy(U[m]))*dx(V[m])) // term4
+               + int2d(Th)(kappa*ux*(thetax*vx+thetay*vy) - kappa*dx(U[m])*(thetax*dx(V[m])+thetay*dy(V[m]))) // term5
+               + int2d(Th)(fx*theta[i]*v - fx*theta[i]*V[m]) // term6
+               + int2d(Th)(f*v*thetax - f*V[m]*thetax); //term7
+
+        Error2 = int2d(Th)((1/2)*u^2*thetay - (1/2)*U[m]^2*thetay) // term1
+               - int2d(Th)(ut*v*thetay - (1/dt)*(U[m]-U[m-1])*V[m]*thetay) // term2
+               - int2d(Th)(kappa*(ux*vx+uy*vy)*thetay - kappa*(dx(U[m])*dx(V[m])+dy(U[m])*dy(V[m]))*thetay) // term3
+               + int2d(Th)(kappa*(thetax*ux+thetay*uy)*vy - kappa*(thetax*dx(U[m])+thetay*dy(U[m]))*dy(V[m])) // term4
+               + int2d(Th)(kappa*uy*(thetax*vx+thetay*vy) - kappa*dy(U[m])*(thetax*dx(V[m])+thetay*dy(V[m]))) // term5
+               + int2d(Th)(fy*theta[i]*v - fy*theta[i]*V[m]) // term6
+               + int2d(Th)(f*v*thetay - f*V[m]*thetay); //term7
+
+        if(t==0 || t==T){
+            error1[i] = error1[i] + abs(Error1)*(dt/2);
+            error2[i] = error2[i] + abs(Error2)*(dt/2);
+        } 
+        else{
+            error1[i] = error1[i] + abs(Error1)*dt; 
+            error2[i] = error2[i] + abs(Error2)*dt;
+        }   
+    m++;
+    }
+}
+
+KinvErr1 = Kinv*error1;
+KinvErr2 = Kinv*error2;
+Bdy = (error1)'*KinvErr1 + (error2)'*KinvErr2;
+Bdy = sqrt(Bdy);
+file<<"Node = "<< Node <<" Error = "<< Bdy <<endl;
+}

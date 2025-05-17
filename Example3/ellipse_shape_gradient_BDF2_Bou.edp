@@ -1,0 +1,167 @@
+// Boundary type "shape gradient"
+load "lapack"  
+load "msh3"
+
+// Time
+real M = 500; 
+real T = 1;
+real dt = T/M; // dt = k
+real t;
+
+// Function
+real ku = 1; // Adjust the order of magnitude
+
+real kappa= 1;
+func f = (177*ku*(T - t)^3*(x^2/4 + y^2 - 1))/2 - 3*ku*(2*T - 2*t)*(x^2/4 + y^2 - 1)^3 + (21*ku*x^2*(T - t)^3)/2 + 312*ku*y^2*(T - t)^3;
+
+// Dual space
+int gamma = 2; 
+int gamNum = (gamma + 1) * (gamma + 2) / 2; 
+ofstream file("error_shape_gradient.txt", append);  
+file<<"BDF2"<<" gamma = "<< gamma <<"  M = "<< M <<endl;
+//file<<"alpha = "<< alpha <<"  beta = "<< beta <<"  ku = "<< ku <<endl;
+
+// Mesh size
+int n,m; 
+border a(t=0, 1){x=2*cos(2*pi*t); y=sin(2*pi*t); label=1;}
+for(n=6;n<=10;n++){ 
+t = 0;
+int Node = 2^n;
+mesh Th = buildmesh(a(Node));
+
+// Fespace
+fespace Vh(Th, P1);
+Vh u, uu, uuu, v, vv, vvv, w, ux, uy, vx, vy;
+Vh[int] U(M+1),V(M+1);
+
+// Parabolic
+problem ParabolicCN(u, v)= int2d(Th)(
+    2*u*v
+    + kappa*dt*(dx(u)*dx(v) + dy(u)*dy(v))
+    )
+    + int2d(Th)(
+    - 2*uu*v
+    + kappa*dt*(dx(uu)*dx(v) + dy(uu)*dy(v))
+    )
+    + int2d(Th)(
+    - 2*dt*f*v // f_(1/2)dt
+    )
+    + on(1, 2, 3, 4, u=0); // Dirichelet boundry
+
+problem ParabolicBDF2 (u, v, init=m-2)= int2d(Th)(  // the matrix is reconstructed when init= false or 0 
+    3*u*v
+    + kappa*2*dt*(dx(u)*dx(v) + dy(u)*dy(v))
+    )
+    + int2d(Th)(
+    - 4*uu*v
+    + uuu*v
+    - 2*dt*f*v
+    )
+    + on(1, 2, 3, 4, u=0); // Dirichelet boundry
+
+for (m = 1; m <= M; m++){ 
+    t = t+dt;
+    if (m == 1) {
+        t = t - dt/2;
+        uu = 3*ku*T^2*(x^2/4 + y^2 - 1)^3 - (15*ku*T^3*(x^2/4 + y^2 - 1)^2)/2 - (3*ku*x^2*T^3*(x^2/4 + y^2 - 1))/2 - 24*ku*y^2*T^3*(x^2/4 + y^2 - 1);
+        U[0] = uu;
+        ParabolicCN; 
+    }
+    else ParabolicBDF2; 
+    U[m] = u;
+    uuu = uu;
+    uu = u; 
+}
+  
+// Adjoint 
+problem AdjointEuler (v, w)= int2d(Th)(
+    v*w
+    + kappa*dt*(dx(v)*dx(w) + dy(v)*dy(w))
+    )
+    + int2d(Th)(
+    - vv*w
+    - dt*u*w // u_M-1 
+    )
+    + on(1, 2, 3, 4, v=0); // Dirichelet boundry
+
+problem AdjointBDF2 (v, w, init=-m+M-2)= int2d(Th)(  // the matrix is reconstructed iwhen init= false or 0 
+    3*v*w
+    + kappa*2*dt*(dx(v)*dx(w) + dy(v)*dy(w))
+    )
+    + int2d(Th)(
+    - 4*vv*w
+    + vvv*w
+    - 2*dt*u*w 
+    )
+    + on(1, 2, 3, 4, v=0); // Dirichelet boundry
+
+for (m = M-1; m >= 0; m--){  
+    u = U[m];
+    t = t - dt;
+    if (m == M-1) {
+        V[M] = 0;
+        vv = 0;
+        AdjointEuler;
+    }
+    else AdjointBDF2; 
+    V[m] = v;
+    vvv = vv;
+    vv = v; 
+}
+
+cout <<"[[[[[[[[[[[ Node = "<< Node <<" ]]]]]]]]]]]"<<endl;
+
+// Eulerian derivative
+real[int] error1(gamNum), error2(gamNum); 
+real[int] KinvErr1(gamNum), KinvErr2(gamNum);
+real[int,int] K(gamNum,gamNum), Kinv(gamNum,gamNum);
+real Bdy;
+Vh[int] theta(gamNum);
+
+m = 0;
+// basis
+for(int i=0;i<=gamma;i++)
+    for(int j=0;j<=gamma-i;j++)
+        theta[m++] = x^i*y^j; 
+
+// Mass matric
+for(int i=0;i<gamNum;i++)
+    for(int j=0;j<gamNum;j++)
+        K(i,j) = int2d(Th,qft=qf5pT) ( theta[i]*theta[j] + dx(theta[i])*dx(theta[j]) + dy(theta[i])*dy(theta[j]) );
+Kinv = K^-1;
+u = U[M];
+for(int i=0;i<gamNum;i++)
+{
+    error1[i] = 0;
+    error2[i] = 0;
+    m=0;
+    // Composite trapezoid
+    for (t=0 ; t<=T ; t=t+dt){   
+        ux = (9*ku*x*(T - t)^2*(x^2/4 + y^2 - 1)^2)/2 - 12*ku*x*y^2*(T - t)^3 - (21*ku*x*(T - t)^3*(x^2/4 + y^2 - 1))/2 - (3*ku*x^3*(T - t)^3)/4;
+        uy = 18*ku*y*(T - t)^2*(x^2/4 + y^2 - 1)^2 - 3*ku*x^2*y*(T - t)^3 - 78*ku*y*(T - t)^3*(x^2/4 + y^2 - 1) - 48*ku*y^3*(T - t)^3;
+        vx = (3*ku*x*(T - t)^3*(x^2/4 + y^2 - 1)^2)/2;
+        vy = 6*ku*y*(T - t)^3*(x^2/4 + y^2 - 1)^2;
+        u = 3*ku*(T - t)^2*(x^2/4 + y^2 - 1)^3 - (15*ku*(T - t)^3*(x^2/4 + y^2 - 1)^2)/2 - (3*ku*x^2*(T - t)^3*(x^2/4 + y^2 - 1))/2 - 24*ku*y^2*(T - t)^3*(x^2/4 + y^2 - 1);
+        if(t==0 || t==T){
+            error1[i] = error1[i] + abs((dt/2)*int1d(Th,1,qft=qf5pT)( ( (1/2)*u^2 + kappa*(ux*N.x+uy*N.y)*(vx*N.x+vy*N.y))*theta[i]*N.x )
+                        - (dt/2)*int1d(Th,1,qft=qf5pT)( ( (1/2)*(U[m])^2 + kappa*(dx(U[m])*N.x+dy(U[m])*N.y)*(dx(V[m])*N.x+dy(V[m])*N.y) )*theta[i]*N.x ));
+            error2[i] = error2[i] + abs((dt/2)*int1d(Th,1,qft=qf5pT)( ( (1/2)*u^2 + kappa*(ux*N.x+uy*N.y)*(vx*N.x+vy*N.y))*theta[i]*N.y )
+                        - (dt/2)*int1d(Th,1,qft=qf5pT)( ( (1/2)*(U[m])^2 + kappa*(dx(U[m])*N.x+dy(U[m])*N.y)*(dx(V[m])*N.x+dy(V[m])*N.y) )*theta[i]*N.y ));
+        }
+        else{
+            error1[i] = error1[i] + abs(dt*int1d(Th,1,qft=qf5pT)( ( (1/2)*u^2 + kappa*(ux*N.x+uy*N.y)*(vx*N.x+vy*N.y))*theta[i]*N.x )
+                        - dt*int1d(Th,1,qft=qf5pT)( ( (1/2)*(U[m])^2 + kappa*(dx(U[m])*N.x+dy(U[m])*N.y)*(dx(V[m])*N.x+dy(V[m])*N.y) )*theta[i]*N.x ));
+            error2[i] = error2[i] + abs(dt*int1d(Th,1,qft=qf5pT)( ( (1/2)*u^2 + kappa*(ux*N.x+uy*N.y)*(vx*N.x+vy*N.y))*theta[i]*N.y )
+                        - dt*int1d(Th,1,qft=qf5pT)( ( (1/2)*(U[m])^2 + kappa*(dx(U[m])*N.x+dy(U[m])*N.y)*(dx(V[m])*N.x+dy(V[m])*N.y) )*theta[i]*N.y ));
+        }
+    m++;
+    }
+}
+
+KinvErr1 = Kinv*error1;
+KinvErr2 = Kinv*error2;
+Bdy = (error1)'*KinvErr1 + (error2)'*KinvErr2;
+Bdy = sqrt(Bdy); 
+file<<"Node = "<< Node <<" Error = "<< Bdy <<endl;
+}
+

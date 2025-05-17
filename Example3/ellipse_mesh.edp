@@ -1,0 +1,6 @@
+// Mesh
+mesh Th1 = square(32,32);
+border a(t=0, 1){x=2*cos(2*pi*t); y=sin(2*pi*t); label=1;}
+mesh Th2 = buildmesh(a(128));
+//plot(Th1,ps="square_BE.eps");
+plot(Th2,ps="ellipses_BE.eps");
